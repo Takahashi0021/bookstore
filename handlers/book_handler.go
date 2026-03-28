@@ -1,23 +1,42 @@
 package handlers
 
 import (
-	"bookstore/models"
-	"bookstore/storage"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/mux"
 )
 
-type BookHandler struct {
-	storage *storage.Storage
+type Book struct {
+	ID         int     `json:"id"`
+	Title      string  `json:"title"`
+	AuthorID   int     `json:"author_id"`
+	CategoryID int     `json:"category_id"`
+	Price      float64 `json:"price"`
 }
 
-func NewBookHandler(storage *storage.Storage) *BookHandler {
-	return &BookHandler{storage: storage}
+type Author struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
+
+type Category struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+var (
+	Books      = make(map[int]Book)
+	Authors    = make(map[int]Author)
+	Categories = make(map[int]Category)
+	BookID     = 1
+	AuthorID   = 1
+	CategoryID = 1
+	mu         sync.RWMutex
+)
 
 type BookRequest struct {
 	Title      string  `json:"title"`
@@ -45,45 +64,68 @@ func ValidateBook(book BookRequest) map[string]string {
 		errors["price"] = "Price cannot be negative"
 	}
 
+	if book.Price > 10000 {
+		errors["price"] = "Price cannot exceed 10000"
+	}
+
 	return errors
 }
 
+type BookHandler struct{}
+
+func NewBookHandler() *BookHandler {
+	return &BookHandler{}
+}
+
 func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
-	books := h.storage.GetBooks()
+	mu.RLock()
+	defer mu.RUnlock()
 
-	category := r.URL.Query().Get("category")
-	author := r.URL.Query().Get("author")
-	minPrice := r.URL.Query().Get("min_price")
-	maxPrice := r.URL.Query().Get("max_price")
+	categoryName := r.URL.Query().Get("category")
+	authorName := r.URL.Query().Get("author")
+	minPriceStr := r.URL.Query().Get("min_price")
+	maxPriceStr := r.URL.Query().Get("max_price")
 
-	filteredBooks := make([]models.Book, 0)
-	for _, book := range books {
-		if category != "" {
-			cat, exists := h.storage.GetCategoryByID(book.CategoryID)
-			if !exists || cat.Name != category {
+	var minPrice, maxPrice float64
+	var err error
+
+	if minPriceStr != "" {
+		minPrice, err = strconv.ParseFloat(minPriceStr, 64)
+		if err != nil {
+			http.Error(w, "Invalid min_price", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if maxPriceStr != "" {
+		maxPrice, err = strconv.ParseFloat(maxPriceStr, 64)
+		if err != nil {
+			http.Error(w, "Invalid max_price", http.StatusBadRequest)
+			return
+		}
+	}
+
+	filteredBooks := make([]Book, 0)
+	for _, book := range Books {
+		if categoryName != "" {
+			category, exists := Categories[book.CategoryID]
+			if !exists || !strings.EqualFold(category.Name, categoryName) {
 				continue
 			}
 		}
 
-		if author != "" {
-			auth, exists := h.storage.GetAuthorByID(book.AuthorID)
-			if !exists || auth.Name != author {
+		if authorName != "" {
+			author, exists := Authors[book.AuthorID]
+			if !exists || !strings.EqualFold(author.Name, authorName) {
 				continue
 			}
 		}
 
-		if minPrice != "" {
-			min, _ := strconv.ParseFloat(minPrice, 64)
-			if book.Price < min {
-				continue
-			}
+		if minPriceStr != "" && book.Price < minPrice {
+			continue
 		}
-
-		if maxPrice != "" {
-			max, _ := strconv.ParseFloat(maxPrice, 64)
-			if book.Price > max {
-				continue
-			}
+		if maxPriceStr != "" && book.Price > maxPrice {
+			continue
 		}
 
 		filteredBooks = append(filteredBooks, book)
@@ -97,6 +139,9 @@ func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	if pageSize < 1 {
 		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
 	}
 
 	start := (page - 1) * pageSize
@@ -112,17 +157,35 @@ func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 	paginatedBooks := filteredBooks[start:end]
 
 	type BookResponse struct {
-		models.Book
-		AuthorName   string `json:"author_name"`
-		CategoryName string `json:"category_name"`
+		ID           int     `json:"id"`
+		Title        string  `json:"title"`
+		AuthorID     int     `json:"author_id"`
+		AuthorName   string  `json:"author_name"`
+		CategoryID   int     `json:"category_id"`
+		CategoryName string  `json:"category_name"`
+		Price        float64 `json:"price"`
 	}
 
 	response := make([]BookResponse, 0)
 	for _, book := range paginatedBooks {
+		authorName := "Unknown"
+		if author, exists := Authors[book.AuthorID]; exists {
+			authorName = author.Name
+		}
+
+		categoryName := "Unknown"
+		if category, exists := Categories[book.CategoryID]; exists {
+			categoryName = category.Name
+		}
+
 		response = append(response, BookResponse{
-			Book:         book,
-			AuthorName:   h.storage.GetAuthorName(book.AuthorID),
-			CategoryName: h.storage.GetCategoryName(book.CategoryID),
+			ID:           book.ID,
+			Title:        book.Title,
+			AuthorID:     book.AuthorID,
+			AuthorName:   authorName,
+			CategoryID:   book.CategoryID,
+			CategoryName: categoryName,
+			Price:        book.Price,
 		})
 	}
 
@@ -154,28 +217,32 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, exists := h.storage.GetAuthorByID(req.AuthorID); !exists {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, exists := Authors[req.AuthorID]; !exists {
 		http.Error(w, "Author not found", http.StatusBadRequest)
 		return
 	}
 
-	if _, exists := h.storage.GetCategoryByID(req.CategoryID); !exists {
+	if _, exists := Categories[req.CategoryID]; !exists {
 		http.Error(w, "Category not found", http.StatusBadRequest)
 		return
 	}
 
-	book := models.Book{
+	book := Book{
+		ID:         BookID,
 		Title:      req.Title,
 		AuthorID:   req.AuthorID,
 		CategoryID: req.CategoryID,
 		Price:      req.Price,
 	}
-
-	createdBook := h.storage.CreateBook(book)
+	Books[BookID] = book
+	BookID++
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(createdBook)
+	json.NewEncoder(w).Encode(book)
 }
 
 func (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {
@@ -186,22 +253,43 @@ func (h *BookHandler) GetBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book, exists := h.storage.GetBookByID(id)
+	mu.RLock()
+	defer mu.RUnlock()
+
+	book, exists := Books[id]
 	if !exists {
 		http.Error(w, "Book not found", http.StatusNotFound)
 		return
 	}
 
+	authorName := "Unknown"
+	if author, exists := Authors[book.AuthorID]; exists {
+		authorName = author.Name
+	}
+
+	categoryName := "Unknown"
+	if category, exists := Categories[book.CategoryID]; exists {
+		categoryName = category.Name
+	}
+
 	type BookResponse struct {
-		models.Book
-		AuthorName   string `json:"author_name"`
-		CategoryName string `json:"category_name"`
+		ID           int     `json:"id"`
+		Title        string  `json:"title"`
+		AuthorID     int     `json:"author_id"`
+		AuthorName   string  `json:"author_name"`
+		CategoryID   int     `json:"category_id"`
+		CategoryName string  `json:"category_name"`
+		Price        float64 `json:"price"`
 	}
 
 	response := BookResponse{
-		Book:         book,
-		AuthorName:   h.storage.GetAuthorName(book.AuthorID),
-		CategoryName: h.storage.GetCategoryName(book.CategoryID),
+		ID:           book.ID,
+		Title:        book.Title,
+		AuthorID:     book.AuthorID,
+		AuthorName:   authorName,
+		CategoryID:   book.CategoryID,
+		CategoryName: categoryName,
+		Price:        book.Price,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -231,31 +319,35 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, exists := h.storage.GetAuthorByID(req.AuthorID); !exists {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, exists := Books[id]; !exists {
+		http.Error(w, "Book not found", http.StatusNotFound)
+		return
+	}
+
+	if _, exists := Authors[req.AuthorID]; !exists {
 		http.Error(w, "Author not found", http.StatusBadRequest)
 		return
 	}
 
-	if _, exists := h.storage.GetCategoryByID(req.CategoryID); !exists {
+	if _, exists := Categories[req.CategoryID]; !exists {
 		http.Error(w, "Category not found", http.StatusBadRequest)
 		return
 	}
 
-	book := models.Book{
+	book := Book{
+		ID:         id,
 		Title:      req.Title,
 		AuthorID:   req.AuthorID,
 		CategoryID: req.CategoryID,
 		Price:      req.Price,
 	}
-
-	updatedBook, exists := h.storage.UpdateBook(id, book)
-	if !exists {
-		http.Error(w, "Book not found", http.StatusNotFound)
-		return
-	}
+	Books[id] = book
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(updatedBook)
+	json.NewEncoder(w).Encode(book)
 }
 
 func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
@@ -266,10 +358,59 @@ func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if exists := h.storage.DeleteBook(id); !exists {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, exists := Books[id]; !exists {
 		http.Error(w, "Book not found", http.StatusNotFound)
 		return
 	}
 
+	delete(Books, id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func InitSampleData() {
+	Authors[1] = Author{ID: 1, Name: "J.K. Rowling"}
+	Authors[2] = Author{ID: 2, Name: "George R.R. Martin"}
+	Authors[3] = Author{ID: 3, Name: "J.R.R. Tolkien"}
+	Authors[4] = Author{ID: 4, Name: "Stephen King"}
+	AuthorID = 5
+
+	Categories[1] = Category{ID: 1, Name: "Fiction"}
+	Categories[2] = Category{ID: 2, Name: "Fantasy"}
+	Categories[3] = Category{ID: 3, Name: "Science Fiction"}
+	Categories[4] = Category{ID: 4, Name: "Mystery"}
+	Categories[5] = Category{ID: 5, Name: "Horror"}
+	CategoryID = 6
+
+	Books[1] = Book{
+		ID:         1,
+		Title:      "Harry Potter and the Philosopher's Stone",
+		AuthorID:   1,
+		CategoryID: 2,
+		Price:      19.99,
+	}
+	Books[2] = Book{
+		ID:         2,
+		Title:      "A Game of Thrones",
+		AuthorID:   2,
+		CategoryID: 2,
+		Price:      24.99,
+	}
+	Books[3] = Book{
+		ID:         3,
+		Title:      "The Hobbit",
+		AuthorID:   3,
+		CategoryID: 2,
+		Price:      14.99,
+	}
+	Books[4] = Book{
+		ID:         4,
+		Title:      "The Shining",
+		AuthorID:   4,
+		CategoryID: 5,
+		Price:      18.99,
+	}
+	BookID = 5
 }

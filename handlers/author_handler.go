@@ -1,20 +1,10 @@
 package handlers
 
 import (
-	"bookstore/models"
-	"bookstore/storage"
 	"encoding/json"
 	"net/http"
 	"strings"
 )
-
-type AuthorHandler struct {
-	storage *storage.Storage
-}
-
-func NewAuthorHandler(storage *storage.Storage) *AuthorHandler {
-	return &AuthorHandler{storage: storage}
-}
 
 type AuthorRequest struct {
 	Name string `json:"name"`
@@ -23,20 +13,37 @@ type AuthorRequest struct {
 func ValidateAuthor(author AuthorRequest) map[string]string {
 	errors := make(map[string]string)
 
-	if strings.TrimSpace(author.Name) == "" {
+	name := strings.TrimSpace(author.Name)
+	if name == "" {
 		errors["name"] = "Name is required"
+	} else if len(name) < 2 {
+		errors["name"] = "Name must be at least 2 characters long"
+	} else if len(name) > 100 {
+		errors["name"] = "Name cannot exceed 100 characters"
 	}
 
 	return errors
 }
 
+type AuthorHandler struct{}
+
+func NewAuthorHandler() *AuthorHandler {
+	return &AuthorHandler{}
+}
+
 func (h *AuthorHandler) ListAuthors(w http.ResponseWriter, r *http.Request) {
-	authors := h.storage.GetAuthors()
+	mu.RLock()
+	defer mu.RUnlock()
+
+	authorList := make([]Author, 0, len(Authors))
+	for _, author := range Authors {
+		authorList = append(authorList, author)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data":  authors,
-		"total": len(authors),
+		"data":  authorList,
+		"total": len(authorList),
 	})
 }
 
@@ -57,13 +64,24 @@ func (h *AuthorHandler) CreateAuthor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	author := models.Author{
-		Name: strings.TrimSpace(req.Name),
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, existingAuthor := range Authors {
+		if strings.EqualFold(existingAuthor.Name, strings.TrimSpace(req.Name)) {
+			http.Error(w, "Author with this name already exists", http.StatusConflict)
+			return
+		}
 	}
 
-	createdAuthor := h.storage.CreateAuthor(author)
+	author := Author{
+		ID:   AuthorID,
+		Name: strings.TrimSpace(req.Name),
+	}
+	Authors[AuthorID] = author
+	AuthorID++
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(createdAuthor)
+	json.NewEncoder(w).Encode(author)
 }

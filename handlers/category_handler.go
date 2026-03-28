@@ -1,20 +1,10 @@
 package handlers
 
 import (
-	"bookstore/models"
-	"bookstore/storage"
 	"encoding/json"
 	"net/http"
 	"strings"
 )
-
-type CategoryHandler struct {
-	storage *storage.Storage
-}
-
-func NewCategoryHandler(storage *storage.Storage) *CategoryHandler {
-	return &CategoryHandler{storage: storage}
-}
 
 type CategoryRequest struct {
 	Name string `json:"name"`
@@ -23,20 +13,37 @@ type CategoryRequest struct {
 func ValidateCategory(category CategoryRequest) map[string]string {
 	errors := make(map[string]string)
 
-	if strings.TrimSpace(category.Name) == "" {
+	name := strings.TrimSpace(category.Name)
+	if name == "" {
 		errors["name"] = "Name is required"
+	} else if len(name) < 2 {
+		errors["name"] = "Name must be at least 2 characters long"
+	} else if len(name) > 50 {
+		errors["name"] = "Name cannot exceed 50 characters"
 	}
 
 	return errors
 }
 
+type CategoryHandler struct{}
+
+func NewCategoryHandler() *CategoryHandler {
+	return &CategoryHandler{}
+}
+
 func (h *CategoryHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
-	categories := h.storage.GetCategories()
+	mu.RLock()
+	defer mu.RUnlock()
+
+	categoryList := make([]Category, 0, len(Categories))
+	for _, category := range Categories {
+		categoryList = append(categoryList, category)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data":  categories,
-		"total": len(categories),
+		"data":  categoryList,
+		"total": len(categoryList),
 	})
 }
 
@@ -57,13 +64,24 @@ func (h *CategoryHandler) CreateCategory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	category := models.Category{
-		Name: strings.TrimSpace(req.Name),
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, existingCategory := range Categories {
+		if strings.EqualFold(existingCategory.Name, strings.TrimSpace(req.Name)) {
+			http.Error(w, "Category with this name already exists", http.StatusConflict)
+			return
+		}
 	}
 
-	createdCategory := h.storage.CreateCategory(category)
+	category := Category{
+		ID:   CategoryID,
+		Name: strings.TrimSpace(req.Name),
+	}
+	Categories[CategoryID] = category
+	CategoryID++
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(createdCategory)
+	json.NewEncoder(w).Encode(category)
 }
