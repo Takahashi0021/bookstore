@@ -1,0 +1,23 @@
+{
+  "1": {
+    "id": 1,
+    "title": "Harry Potter and the Philosopher's Stone",
+    "author_id": 1,
+    "category_id": 2,
+    "price": 19.99
+  },
+  "2": {
+    "id": 2,
+    "title": "A Game of Thrones",
+    "author_id": 2,
+    "category_id": 2,
+    "price": 24.99
+  },
+  "3": {
+    "id": 3,
+    "title": "The Hobbit",
+    "author_id": 3,
+    "category_id": 2,
+    "price": 14.99
+  }
+}

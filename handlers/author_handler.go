@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"bookstore/models"
+	"bookstore/utils"
 )
 
 type AuthorRequest struct {
@@ -35,7 +38,7 @@ func (h *AuthorHandler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	authorList := make([]Author, 0, len(Authors))
+	authorList := make([]models.Author, 0, len(Authors))
 	for _, author := range Authors {
 		authorList = append(authorList, author)
 	}
@@ -69,17 +72,19 @@ func (h *AuthorHandler) CreateAuthor(w http.ResponseWriter, r *http.Request) {
 
 	for _, existingAuthor := range Authors {
 		if strings.EqualFold(existingAuthor.Name, strings.TrimSpace(req.Name)) {
-			http.Error(w, "Author with this name already exists", http.StatusConflict)
+			http.Error(w, "Author already exists", http.StatusConflict)
 			return
 		}
 	}
 
-	author := Author{
+	author := models.Author{
 		ID:   AuthorID,
 		Name: strings.TrimSpace(req.Name),
 	}
 	Authors[AuthorID] = author
 	AuthorID++
+
+	go utils.SaveAuthors(Authors)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

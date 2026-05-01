@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"bookstore/models"
+	"bookstore/utils"
 )
 
 type CategoryRequest struct {
@@ -35,7 +38,7 @@ func (h *CategoryHandler) ListCategories(w http.ResponseWriter, r *http.Request)
 	mu.RLock()
 	defer mu.RUnlock()
 
-	categoryList := make([]Category, 0, len(Categories))
+	categoryList := make([]models.Category, 0, len(Categories))
 	for _, category := range Categories {
 		categoryList = append(categoryList, category)
 	}
@@ -69,17 +72,19 @@ func (h *CategoryHandler) CreateCategory(w http.ResponseWriter, r *http.Request)
 
 	for _, existingCategory := range Categories {
 		if strings.EqualFold(existingCategory.Name, strings.TrimSpace(req.Name)) {
-			http.Error(w, "Category with this name already exists", http.StatusConflict)
+			http.Error(w, "Category already exists", http.StatusConflict)
 			return
 		}
 	}
 
-	category := Category{
+	category := models.Category{
 		ID:   CategoryID,
 		Name: strings.TrimSpace(req.Name),
 	}
 	Categories[CategoryID] = category
 	CategoryID++
+
+	go utils.SaveCategories(Categories)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

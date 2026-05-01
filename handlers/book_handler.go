@@ -7,31 +7,16 @@ import (
 	"strings"
 	"sync"
 
+	"bookstore/models"
+	"bookstore/utils"
+
 	"github.com/gorilla/mux"
 )
 
-type Book struct {
-	ID         int     `json:"id"`
-	Title      string  `json:"title"`
-	AuthorID   int     `json:"author_id"`
-	CategoryID int     `json:"category_id"`
-	Price      float64 `json:"price"`
-}
-
-type Author struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-}
-
-type Category struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-}
-
 var (
-	Books      = make(map[int]Book)
-	Authors    = make(map[int]Author)
-	Categories = make(map[int]Category)
+	Books      = make(map[int]models.Book)
+	Authors    = make(map[int]models.Author)
+	Categories = make(map[int]models.Category)
 	BookID     = 1
 	AuthorID   = 1
 	CategoryID = 1
@@ -105,7 +90,7 @@ func (h *BookHandler) ListBooks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	filteredBooks := make([]Book, 0)
+	filteredBooks := make([]models.Book, 0)
 	for _, book := range Books {
 		if categoryName != "" {
 			category, exists := Categories[book.CategoryID]
@@ -230,7 +215,7 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book := Book{
+	book := models.Book{
 		ID:         BookID,
 		Title:      req.Title,
 		AuthorID:   req.AuthorID,
@@ -239,6 +224,8 @@ func (h *BookHandler) CreateBook(w http.ResponseWriter, r *http.Request) {
 	}
 	Books[BookID] = book
 	BookID++
+
+	go utils.SaveBooks(Books)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -337,7 +324,7 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	book := Book{
+	book := models.Book{
 		ID:         id,
 		Title:      req.Title,
 		AuthorID:   req.AuthorID,
@@ -345,6 +332,8 @@ func (h *BookHandler) UpdateBook(w http.ResponseWriter, r *http.Request) {
 		Price:      req.Price,
 	}
 	Books[id] = book
+
+	go utils.SaveBooks(Books)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(book)
@@ -367,50 +356,49 @@ func (h *BookHandler) DeleteBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	delete(Books, id)
+
+	go utils.SaveBooks(Books)
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func InitSampleData() {
-	Authors[1] = Author{ID: 1, Name: "J.K. Rowling"}
-	Authors[2] = Author{ID: 2, Name: "George R.R. Martin"}
-	Authors[3] = Author{ID: 3, Name: "J.R.R. Tolkien"}
-	Authors[4] = Author{ID: 4, Name: "Stephen King"}
-	AuthorID = 5
+func SaveAllData() {
+	utils.SaveBooks(Books)
+	utils.SaveAuthors(Authors)
+	utils.SaveCategories(Categories)
+}
 
-	Categories[1] = Category{ID: 1, Name: "Fiction"}
-	Categories[2] = Category{ID: 2, Name: "Fantasy"}
-	Categories[3] = Category{ID: 3, Name: "Science Fiction"}
-	Categories[4] = Category{ID: 4, Name: "Mystery"}
-	Categories[5] = Category{ID: 5, Name: "Horror"}
-	CategoryID = 6
+func LoadAllData() {
+	if loadedBooks, err := utils.LoadBooks(); err == nil && len(loadedBooks) > 0 {
+		Books = loadedBooks
+		maxID := 0
+		for id := range Books {
+			if id > maxID {
+				maxID = id
+			}
+		}
+		BookID = maxID + 1
+	}
 
-	Books[1] = Book{
-		ID:         1,
-		Title:      "Harry Potter and the Philosopher's Stone",
-		AuthorID:   1,
-		CategoryID: 2,
-		Price:      19.99,
+	if loadedAuthors, err := utils.LoadAuthors(); err == nil && len(loadedAuthors) > 0 {
+		Authors = loadedAuthors
+		maxID := 0
+		for id := range Authors {
+			if id > maxID {
+				maxID = id
+			}
+		}
+		AuthorID = maxID + 1
 	}
-	Books[2] = Book{
-		ID:         2,
-		Title:      "A Game of Thrones",
-		AuthorID:   2,
-		CategoryID: 2,
-		Price:      24.99,
+
+	if loadedCategories, err := utils.LoadCategories(); err == nil && len(loadedCategories) > 0 {
+		Categories = loadedCategories
+		maxID := 0
+		for id := range Categories {
+			if id > maxID {
+				maxID = id
+			}
+		}
+		CategoryID = maxID + 1
 	}
-	Books[3] = Book{
-		ID:         3,
-		Title:      "The Hobbit",
-		AuthorID:   3,
-		CategoryID: 2,
-		Price:      14.99,
-	}
-	Books[4] = Book{
-		ID:         4,
-		Title:      "The Shining",
-		AuthorID:   4,
-		CategoryID: 5,
-		Price:      18.99,
-	}
-	BookID = 5
 }

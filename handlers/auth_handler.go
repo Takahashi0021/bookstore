@@ -71,6 +71,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	Users[UserID] = user
 	UserID++
 
+	go utils.SaveUsers(Users)
+
 	token, err := utils.GenerateToken(user.ID, user.Username, user.Role)
 	if err != nil {
 		http.Error(w, "Error generating token", http.StatusInternalServerError)
